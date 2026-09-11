@@ -26,110 +26,81 @@ const PORT = process.env.PORT || 3000;
 const BOT_NAME = 'Spam_Bot_Kira';
 const AUTHOR = 'Mr Kira Tech';
 const CHANNEL_LINK = 'https://t.me/+mQ3aQpCsEqI0YmY0';
-const CHANNEL_ID = '@spam_bot_dev_channel'; // optionnel: peut rester vide si non résolvable
+const CHANNEL_ID = process.env.CHANNEL_ID || ''; // ex: -1001234567890 (mets l'ID réel)
 const BOT_IMAGE = 'https://i.ibb.co/b5Sr9F9Q/097-DFA98-6-D39-4080-9580-F9-DAD9-FF1-B6-F.jpg';
 const WHATSAPP_CHANNEL = 'https://whatsapp.com/channel/0029Vb7WJzp84OmBD0fEEJ2X';
 
-// Stockages
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
-const USERS_FILE = path.join(__dirname, 'users.json');
 fs.ensureDirSync(SESSIONS_DIR);
 
-// ================= EXPRESS (Render keepalive) =================
+// ================= EXPRESS =================
 const app = express();
 app.get('/', (req, res) => res.send(`${BOT_NAME} is running ✅`));
 app.get('/health', (req, res) => res.json({ status: 'ok', bot: BOT_NAME }));
 app.listen(PORT, () => console.log(`[SERVER] Running on port ${PORT}`));
 
-// ================= TELEGRAM BOT =================
+// ================= TELEGRAM =================
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 console.log(`[TELEGRAM] ${BOT_NAME} démarré...`);
 
-// ================= USER MANAGEMENT =================
-function loadUsers() {
-  if (!fs.existsSync(USERS_FILE)) return {};
-  try { return fs.readJsonSync(USERS_FILE); } catch { return {}; }
-}
-function saveUsers(data) {
-  try { fs.writeJsonSync(USERS_FILE, data, { spaces: 2 }); } catch (e) {
-    console.error('[USERS] save error', e.message);
-  }
-}
-let users = loadUsers();
-
 // ================= JOIN CHECK =================
 async function isUserJoined(userId) {
+  if (!CHANNEL_ID) return true; // pas d'ID configuré → on laisse passer
   try {
     const member = await bot.getChatMember(CHANNEL_ID, userId);
     return ['creator', 'administrator', 'member', 'restricted'].includes(member.status);
   } catch (err) {
-    // Si le bot n'est pas admin de la chaîne, on ne peut pas vérifier → on autorise
-    console.warn(`[JOIN-CHECK] Impossible de vérifier ${userId}: ${err.message}`);
+    console.warn(`[JOIN-CHECK] ${err.message}`);
     return true;
   }
 }
 
 async function requireJoin(msg) {
-  const userId = msg.from.id;
-  const joined = await isUserJoined(userId);
+  const joined = await isUserJoined(msg.from.id);
   if (!joined) {
     await bot.sendPhoto(msg.chat.id, BOT_IMAGE, {
       caption:
         `🚫 *Accès refusé*\n\n` +
-        `Pour utiliser *${BOT_NAME}*, vous devez d'abord rejoindre notre chaîne.\n\n` +
-        `🔗 ${CHANNEL_LINK}\n\n` +
-        `_Après avoir rejoint, retapez /start._`,
-      parse_mode: 'Markdown'
+        `Rejoins d'abord la chaîne pour utiliser *${BOT_NAME}*.\n\n` +
+        `🔗 ${CHANNEL_LINK}\n\n_Puis retape /start._`,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard: [[{ text: '📢 Rejoindre', url: CHANNEL_LINK }]] }
     });
     return false;
   }
   return true;
 }
 
-// ================= START =================
+// ================= /start =================
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const name = msg.from.first_name || 'Utilisateur';
-
-  const joined = await isUserJoined(msg.from.id);
-  if (!joined) {
+  if (!(await isUserJoined(msg.from.id))) {
     return bot.sendPhoto(chatId, BOT_IMAGE, {
       caption:
-        `👋 Salut *${name}*\n\n` +
-        `⚠️ Vous devez rejoindre notre chaîne Telegram pour utiliser ce bot.\n\n` +
-        `🔗 *Cliquez ici :* ${CHANNEL_LINK}\n\n` +
-        `_Puis retapez /start_`,
+        `👋 Salut *${name}*\n\n⚠️ Rejoins la chaîne pour utiliser ce bot.\n\n🔗 ${CHANNEL_LINK}`,
       parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [[{ text: '📢 Rejoindre la chaîne', url: CHANNEL_LINK }]]
-      }
+      reply_markup: { inline_keyboard: [[{ text: '📢 Rejoindre', url: CHANNEL_LINK }]] }
     });
   }
-
   await bot.sendPhoto(chatId, BOT_IMAGE, {
     caption:
       `╔══════════════════════════════╗\n` +
       `   ✦  *WELCOME IN ${BOT_NAME.toUpperCase()}* ✦\n` +
       `╚══════════════════════════════╝\n\n` +
-      `👑 *Creator* : ${AUTHOR} ✨\n` +
-      `🤖 *Bot* : ${BOT_NAME}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `📌 *COMMANDES DISPONIBLES*\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `👑 *Creator* : ${AUTHOR} ✨\n🤖 *Bot* : ${BOT_NAME}\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📌 *COMMANDES*\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `⚡ /pair <numéro>  →  Jumeler WhatsApp\n` +
       `⚡ /menu           →  Menu principal\n` +
       `⚡ /help           →  Aide complète\n` +
       `⚡ /link           →  Chaîne officielle\n\n` +
-      `🔗 *Chaîne* : ${CHANNEL_LINK}\n\n` +
-      `_Merci à ${AUTHOR} & Ego Tech 🌹_`,
+      `🔗 *Chaîne* : ${CHANNEL_LINK}\n\n_Merci à ${AUTHOR} & Ego Tech 🌹_`,
     parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [[{ text: '📢 Rejoindre la chaîne', url: CHANNEL_LINK }]]
-    }
+    reply_markup: { inline_keyboard: [[{ text: '📢 Rejoindre', url: CHANNEL_LINK }]] }
   });
 });
 
-// ================= MENU =================
+// ================= /menu =================
 bot.onText(/\/menu/, async (msg) => {
   if (!(await requireJoin(msg))) return;
   await bot.sendPhoto(msg.chat.id, BOT_IMAGE, {
@@ -139,80 +110,58 @@ bot.onText(/\/menu/, async (msg) => {
       `═══════════════════════════════════════════\n\n` +
       `📵  NAME       : Spam_Bot_Kira\n\n` +
       `👑  CREATOR   : MR KIRA TECH ✨\n\n` +
-      `───────────────────────────────────────────\n` +
-      `  DESCRIPTION\n` +
-      `───────────────────────────────────────────\n` +
+      `───────────────────────────────────────────\n  DESCRIPTION\n───────────────────────────────────────────\n` +
       `THE BEST FOR CONNECT A ACCOUNT\n` +
-      `───────────────────────────────────────────\n` +
-      `  JOIN MY CHANNEL\n` +
-      `───────────────────────────────────────────\n` +
+      `───────────────────────────────────────────\n  JOIN MY CHANNEL\n───────────────────────────────────────────\n` +
       `🔗 ${CHANNEL_LINK}\n\n` +
-      `───────────────────────────────────────────\n` +
-      `  EXAMPLE COMMAND\n` +
-      `───────────────────────────────────────────\n` +
+      `───────────────────────────────────────────\n  EXAMPLE COMMAND\n───────────────────────────────────────────\n` +
       `⚡ Type : /pair 242...\n\n` +
       `═══════════════════════════════════════════`,
     parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: [[{ text: '📢 Rejoindre la chaîne', url: CHANNEL_LINK }]]
-    }
+    reply_markup: { inline_keyboard: [[{ text: '📢 Rejoindre', url: CHANNEL_LINK }]] }
   });
 });
 
-// ================= HELP =================
+// ================= /help =================
 bot.onText(/\/help/, async (msg) => {
   if (!(await requireJoin(msg))) return;
   await bot.sendMessage(msg.chat.id,
     `📖 *AIDE — ${BOT_NAME}*\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🔹 */start*  →  Démarrer le bot\n` +
-    `🔹 */pair <numéro>*  →  Lier WhatsApp\n` +
-    `   _Ex : /pair 242061234567_\n` +
-    `🔹 */menu*  →  Afficher le menu\n` +
-    `🔹 */link*  →  Rejoindre la chaîne\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `📲 *Comment jumeler WhatsApp ?*\n` +
-    `1. Envoyez /pair suivi de votre numéro (sans le +)\n` +
-    `   Ex : /pair 242061234567\n` +
-    `2. Attendez le code de jumelage (5 min)\n` +
-    `3. WhatsApp → Appareils liés → Lier un appareil\n` +
-    `4. Entrez le code reçu\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `💬 *Commandes après connexion :*\n` +
-    `• /tagall → Mentionner tous les membres\n` +
-    `• /purge  → Retirer les membres (admin requis)\n` +
-    `• /ban    → Bloquer/signaler en boucle\n\n` +
+    `🔹 */pair <numéro>*  →  Lier WhatsApp\n   _Ex : /pair 242061234567_\n` +
+    `🔹 */menu*  →  Menu principal\n` +
+    `🔹 */link*  →  Chaîne officielle\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📲 *Jumeler WhatsApp :*\n` +
+    `1. /pair <numéro sans +>\n2. Attends le code (valide 5 min)\n` +
+    `3. WhatsApp → Appareils liés → Lier\n4. Entre le code\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💬 *Commandes WhatsApp (après connexion) :*\n` +
+    `• /tagall  →  Mentionner tout le groupe\n` +
+    `• /purge confirm  →  Retirer les membres (admin requis)\n` +
+    `• /block <numéro> →  Bloquer un contact (1 seule fois)\n\n` +
     `_Merci à MR KiRA TECH & Ego Tech 🌹_`,
     { parse_mode: 'Markdown' }
   );
 });
 
-// ================= LINK =================
+// ================= /link =================
 bot.onText(/\/link/, async (msg) => {
   await bot.sendMessage(msg.chat.id,
     `🔗 *Rejoins ma chaîne Telegram*\n\n${CHANNEL_LINK}\n\n_${BOT_NAME} by ${AUTHOR}_`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: { inline_keyboard: [[{ text: '📢 Rejoindre', url: CHANNEL_LINK }]] }
-    }
+    { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '📢 Rejoindre', url: CHANNEL_LINK }]] } }
   );
 });
 
-// ================= PAIR =================
-const pendingPairs = new Map(); // userId -> { phoneNumber, sock }
+// ================= /pair =================
+const activeSessions = new Map(); // telegramChatId -> { sock, saveCreds, phone, waChatId }
 
 bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
   if (!(await requireJoin(msg))) return;
   const chatId = msg.chat.id;
-
-  let raw = (match[1] || '').trim();
+  const raw = (match[1] || '').trim();
   if (!raw) {
-    return bot.sendMessage(chatId,
-      `⚠️ *Usage :* /pair <numéro sans le +>\n_Ex : /pair 242061234567_`,
-      { parse_mode: 'Markdown' }
-    );
+    return bot.sendMessage(chatId, `⚠️ *Usage :* /pair <numéro sans +>\n_Ex : /pair 242061234567_`, { parse_mode: 'Markdown' });
   }
-
   const phoneNumber = raw.replace(/[^\d]/g, '');
   if (phoneNumber.length < 8 || phoneNumber.length > 15) {
     return bot.sendMessage(chatId, `❌ Numéro invalide : *${raw}*`, { parse_mode: 'Markdown' });
@@ -221,7 +170,6 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
   await bot.sendMessage(chatId, `📡 Demande en cours pour *${phoneNumber}* 🔁`, { parse_mode: 'Markdown' });
 
   try {
-    // Nettoyer toute session précédente pour ce numéro
     const sessionPath = path.join(SESSIONS_DIR, `session_${chatId}`);
     if (fs.existsSync(sessionPath)) fs.removeSync(sessionPath);
     fs.ensureDirSync(sessionPath);
@@ -242,134 +190,202 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
       syncFullHistory: false
     });
 
-    pendingPairs.set(chatId, { phoneNumber, sock, saveCreds });
-
-    // Sauvegarde des creds
+    activeSessions.set(chatId, { sock, saveCreds, phone: phoneNumber, waChatId: chatId });
     sock.ev.on('creds.update', saveCreds);
 
-    // Gestion connexion
+    // ---- gestion des messages WhatsApp entrants ----
+    attachWhatsAppHandlers(sock, chatId);
+
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, isNewLogin } = update;
-
-      if (isNewLogin) {
-        console.log(`[WA ${phoneNumber}] Nouveau login détecté`);
-      }
-
+      if (isNewLogin) console.log(`[WA ${phoneNumber}] Nouveau login`);
       if (connection === 'open') {
         console.log(`[WA ${phoneNumber}] Connecté ✅`);
-        pendingPairs.delete(chatId);
-
-        // Message dans le chat Telegram
         await bot.sendPhoto(chatId, BOT_IMAGE, {
           caption:
-            `Félicitations 🎉\n` +
-            `Le bot a été connecté avec succès ✅\n\n` +
-            `Taper /help sur votre compte WhatsApp pour utiliser le bot\n\n` +
-            `━━━━━━━━━━━━━━━━━━━\n` +
-            `📢 *Rejoins la chaîne WhatsApp :*\n${WHATSAPP_CHANNEL}\n\n` +
+            `Félicitations 🎉\nLe bot a été connecté avec succès ✅\n\n` +
+            `Tape /help sur ton compte WhatsApp pour utiliser le bot.\n\n` +
+            `━━━━━━━━━━━━━━━━━━━\n📢 *Chaîne WhatsApp :*\n${WHATSAPP_CHANNEL}\n\n` +
             `_Merci à ${AUTHOR} & Ego Tech 🌹🌹_`,
           parse_mode: 'Markdown'
         }).catch(() => {});
-
-        // Message envoyé à son propre compte WhatsApp (Note à soi-même)
         try {
           const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
           await sock.sendMessage(selfJid, {
             image: { url: BOT_IMAGE },
             caption:
               `Bot is connect ✅ tape /help for use the bot\n\n` +
-              `Join my channel WhatsApp\n\n` +
-              `Link : ${WHATSAPP_CHANNEL}\n\n` +
+              `Join my channel WhatsApp\n\nLink : ${WHATSAPP_CHANNEL}\n\n` +
               `Merci à Kira Tech & Ego Tech 🌹🌹`
           });
-        } catch (e) {
-          console.error('[WA] Envoi message post-connexion échoué:', e.message);
-        }
+        } catch (e) { console.error('[WA] msg self échoué:', e.message); }
       }
-
       if (connection === 'close') {
-        const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode;
-        console.log(`[WA ${phoneNumber}] Fermé (code ${statusCode})`);
-
-        if (statusCode === DisconnectReason.loggedOut) {
-          pendingPairs.delete(chatId);
-          await bot.sendMessage(chatId, `❌ Failed : le bot n'a pas pu être connecté, veuillez réessayer.`).catch(() => {});
-        } else if (pendingPairs.has(chatId)) {
-          // Tentative de reconnexion uniquement si le code n'a pas encore été utilisé
-          try {
-            await delay(2000);
-            const { state: st2, saveCreds: sc2 } = await useMultiFileAuthState(sessionPath);
-            const s2 = makeWASocket({
-              version,
-              logger: pino({ level: 'silent' }),
-              browser: Browsers.macOS('Desktop'),
-              auth: { creds: st2.creds, keys: makeCacheableSignalKeyStore(st2.keys, pino({ level: 'silent' })) }
-            });
-            s2.ev.on('creds.update', sc2);
-            pendingPairs.set(chatId, { phoneNumber, sock: s2, saveCreds: sc2 });
-          } catch (e) {
-            console.error('[WA] reconnexion échouée', e.message);
-          }
+        const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
+        console.log(`[WA ${phoneNumber}] Fermé (code ${code})`);
+        if (code === DisconnectReason.loggedOut) {
+          activeSessions.delete(chatId);
+          await bot.sendMessage(chatId, `❌ Le bot n'a pas pu être connecté, réessaie.`).catch(() => {});
         }
       }
     });
 
-    // Attendre un peu avant de demander le code
     await delay(2500);
 
     if (!sock.authState.creds.registered) {
-      await bot.sendMessage(chatId,
-        `📲 Demande de pairing code pour *${phoneNumber}*... 🔄`,
-        { parse_mode: 'Markdown' }
-      );
-
+      await bot.sendMessage(chatId, `📲 Demande de pairing code pour *${phoneNumber}*... 🔄`, { parse_mode: 'Markdown' });
       let code;
-      try {
-        code = await sock.requestPairingCode(phoneNumber);
-      } catch (e) {
-        console.error('[PAIR] requestPairingCode error:', e.message);
-        pendingPairs.delete(chatId);
-        return bot.sendMessage(chatId, `❌ Échec de génération du code. Réessayez plus tard.`);
+      try { code = await sock.requestPairingCode(phoneNumber); }
+      catch (e) {
+        console.error('[PAIR]', e.message);
+        activeSessions.delete(chatId);
+        return bot.sendMessage(chatId, `❌ Échec génération code. Réessaie.`);
       }
-
       const pretty = code?.match(/.{1,4}/g)?.join('-') || code;
-
       await bot.sendMessage(chatId,
         `════════════════════════════════════════\n` +
-        `🔑 *Code de jumelage* :\n` +
-        `        \`${pretty}\`\n` +
+        `🔑 *Code de jumelage* :\n        \`${pretty}\`\n` +
         `════════════════════════════════════════\n\n` +
-        `👉 *Instructions :*\n` +
-        `- Ouvrez WhatsApp sur votre téléphone.\n` +
-        `- Allez dans "Appareils liés" → "Lier un appareil".\n` +
-        `- Entrez ce code pour associer ce bot.\n\n` +
+        `👉 *Instructions :*\n- Ouvre WhatsApp sur ton téléphone.\n` +
+        `- Appareils liés → Lier un appareil.\n- Entre ce code.\n\n` +
         `_Merci à MR KiRA TECH & Mr Ego Tech 🌹_`,
         { parse_mode: 'Markdown' }
       );
-
-      // Expiration après 5 min
-      setTimeout(async () => {
-        if (pendingPairs.has(chatId)) {
-          const entry = pendingPairs.get(chatId);
-          try { entry.sock?.ws?.close(); } catch {}
-          pendingPairs.delete(chatId);
-          await bot.sendMessage(chatId,
-            `⌛ *Code expiré (5 min).*\nLe bot n'a pas été connecté. Veuillez refaire /pair.`,
-            { parse_mode: 'Markdown' }
-          ).catch(() => {});
+      setTimeout(() => {
+        if (activeSessions.has(chatId) && !activeSessions.get(chatId).sock?.authState?.creds?.registered) {
+          // rien : le sock reste actif si déjà connecté
         }
       }, 5 * 60 * 1000);
     }
   } catch (err) {
-    console.error('[PAIR] Erreur:', err);
+    console.error('[PAIR]', err);
     await bot.sendMessage(chatId, `❌ Erreur : ${err.message}`);
   }
 });
 
-// ================= KEEPALIVE (anti sleep Render) =================
-setInterval(() => {
-  console.log(`[KEEPALIVE] ${new Date().toISOString()} - ${BOT_NAME} alive`);
-}, 4 * 60 * 1000);
+// ================= HANDLERS WHATSAPP =================
+function attachWhatsAppHandlers(sock, telegramChatId) {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    for (const m of messages) {
+      try {
+        if (!m.message) continue;
+        if (m.key.fromMe) continue;
+        const from = m.key.remoteJid;
+        if (!from || from === 'status@broadcast') continue;
 
-process.on('uncaughtException', (err) => console.error('[UNCAUGHT]', err));
-process.on('unhandledRejection', (err) => console.error('[UNHANDLED]', err));
+        const text =
+          m.message.conversation ||
+          m.message.extendedTextMessage?.text ||
+          m.message.imageMessage?.caption ||
+          '';
+        if (!text.startsWith('/')) continue;
+
+        const [cmdRaw, ...args] = text.trim().split(/\s+/);
+        const cmd = cmdRaw.toLowerCase();
+        const isGroup = from.endsWith('@g.us');
+
+        // ---- /help (self chat ou groupe) ----
+        if (cmd === '/help') {
+          await sock.sendMessage(from, {
+            text:
+              `📖 *${BOT_NAME} — Help*\n\n` +
+              `• /help\n• /tagall (groupes)\n• /purge confirm (admin)\n• /block <numéro>\n\n` +
+              `_by ${AUTHOR}_`
+          }, { quoted: m });
+          continue;
+        }
+
+        // ---- /tagall ----
+        if (cmd === '/tagall' && isGroup) {
+          const meta = await sock.groupMetadata(from);
+          const participants = meta.participants.map(p => p.id);
+          const mentionText = participants.map(p => `@${p.split('@')[0]}`).join(' ');
+          await sock.sendMessage(from, {
+            text:
+              `📢 *TAG ALL*\n\n${mentionText}\n\n_Message de ${AUTHOR} 🌹_`,
+            mentions: participants
+          }, { quoted: m });
+          continue;
+        }
+
+        // ---- /purge confirm ----
+        if (cmd === '/purge') {
+          if (!isGroup) {
+            await sock.sendMessage(from, { text: '❌ /purge uniquement dans un groupe.' }, { quoted: m });
+            continue;
+          }
+          if (args[0] !== 'confirm') {
+            await sock.sendMessage(from, {
+              text:
+                `⚠️ *Commande destructive*\n\n` +
+                `Cette commande va retirer tous les membres du groupe (sauf admins).\n\n` +
+                `Pour confirmer, tape : */purge confirm*`
+            }, { quoted: m });
+            continue;
+          }
+          // Vérifier que l'émetteur est admin
+          const meta = await sock.groupMetadata(from);
+          const senderId = m.key.participant || m.participant;
+          const senderInfo = meta.participants.find(p => p.id === senderId);
+          if (!senderInfo || !['admin', 'superadmin'].includes(senderInfo.admin)) {
+            await sock.sendMessage(from, { text: '❌ Tu dois être admin du groupe pour purge.' }, { quoted: m });
+            continue;
+          }
+          // Vérifier que le bot est admin
+          const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+          const botInfo = meta.participants.find(p => p.id === botId);
+          if (!botInfo || !['admin', 'superadmin'].includes(botInfo.admin)) {
+            await sock.sendMessage(from, { text: '❌ Le bot doit être admin du groupe.' }, { quoted: m });
+            continue;
+          }
+
+          await sock.sendMessage(from, {
+            image: { url: BOT_IMAGE },
+            caption: `hoo la la encore des créatures inférieure 🌹`
+          });
+
+          const targets = meta.participants
+            .filter(p => !['admin', 'superadmin'].includes(p.admin))
+            .map(p => p.id);
+
+          // Retirer par petits lots pour éviter le rate-limit
+          const chunkSize = 5;
+          for (let i = 0; i < targets.length; i += chunkSize) {
+            const chunk = targets.slice(i, i + chunkSize);
+            try {
+              await sock.groupParticipantsUpdate(from, chunk, 'remove');
+            } catch (e) { console.error('[PURGE]', e.message); }
+            await delay(1500);
+          }
+          continue;
+        }
+
+        // ---- /block ----
+        if (cmd === '/block') {
+          const num = (args.join('') || '').replace(/[^\d]/g, '');
+          if (!num) {
+            await sock.sendMessage(from, { text: '⚠️ Usage : /block 242061234567' }, { quoted: m });
+            continue;
+          }
+          const jid = num + '@s.whatsapp.net';
+          try {
+            await sock.updateBlockStatus(jid, 'block');
+            await sock.sendMessage(from, { text: `✅ Numéro bloqué : ${num}` }, { quoted: m });
+          } catch (e) {
+            await sock.sendMessage(from, { text: `❌ Échec : ${e.message}` }, { quoted: m });
+          }
+          continue;
+        }
+      } catch (e) {
+        console.error('[WA HANDLER]', e.message);
+      }
+    }
+  });
+}
+
+// ================= KEEPALIVE =================
+setInterval(() => console.log(`[KEEPALIVE] ${new Date().toISOString()}`), 4 * 60 * 1000);
+
+process.on('uncaughtException', (e) => console.error('[UNCAUGHT]', e));
+process.on('unhandledRejection', (e) => console.error('[UNHANDLED]', e));
