@@ -1,0 +1,23 @@
+{
+  "name": "spam_bot_kira",
+  "version": "1.0.0",
+  "description": "Bot Telegram pour jumelage WhatsApp - by Mr Kira Tech",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "author": "Mr Kira Tech",
+  "license": "MIT",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "@hapi/boom": "^10.0.1",
+    "pino": "^9.5.0",
+    "qrcode-terminal": "^0.12.0",
+    "node-telegram-bot-api": "^0.66.0",
+    "express": "^4.21.2",
+    "axios": "^1.7.9",
+    "fs-extra": "^11.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
