@@ -30,9 +30,8 @@ const CHANNEL_ID = process.env.CHANNEL_ID || '';
 const BOT_IMAGE = 'https://i.ibb.co/b5Sr9F9Q/097-DFA98-6-D39-4080-9580-F9-DAD9-FF1-B6-F.jpg';
 const WHATSAPP_CHANNEL = 'https://whatsapp.com/channel/0029Vb7WJzp84OmBD0fEEJ2X';
 
-const SESSIONS_DIR = process.env.RENDER
-  ? '/data/sessions'
-  : path.join(__dirname, 'sessions');
+// Sessions stockées à côté du fichier server.js (dans src/sessions)
+const SESSIONS_DIR = path.join(__dirname, 'sessions');
 try { fs.ensureDirSync(SESSIONS_DIR); } catch (e) { console.error('[FS]', e.message); }
 
 // ================= EXPRESS =================
@@ -155,25 +154,45 @@ bot.onText(/\/link/, async (msg) => {
 });
 
 // ================= /pair =================
-const activeSessions = new Map();
+const activeSessions = new Map(); // telegramChatId -> { sock, saveCreds, phone }
 
 bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
   if (!(await requireJoin(msg))) return;
   const chatId = msg.chat.id;
   const raw = (match[1] || '').trim();
+
   if (!raw) {
-    return bot.sendMessage(chatId, `⚠️ *Usage :* /pair <numéro sans +>\n_Ex : /pair 242061234567_`, { parse_mode: 'Markdown' });
+    return bot.sendMessage(chatId,
+      `⚠️ *Usage :* /pair <numéro sans +>\n_Ex : /pair 242061234567_`,
+      { parse_mode: 'Markdown' }
+    );
   }
+
   const phoneNumber = raw.replace(/[^\d]/g, '');
   if (phoneNumber.length < 8 || phoneNumber.length > 15) {
     return bot.sendMessage(chatId, `❌ Numéro invalide : *${raw}*`, { parse_mode: 'Markdown' });
+  }
+
+  // Si une session existe déjà pour ce chat, on la ferme proprement
+  if (activeSessions.has(chatId)) {
+    try {
+      const old = activeSessions.get(chatId);
+      old.sock?.ws?.close();
+    } catch (e) {}
+    activeSessions.delete(chatId);
   }
 
   await bot.sendMessage(chatId, `📡 Demande en cours pour *${phoneNumber}* 🔁`, { parse_mode: 'Markdown' });
 
   try {
     const sessionPath = path.join(SESSIONS_DIR, `session_${chatId}`);
-    if (fs.existsSync(sessionPath)) fs.removeSync(sessionPath);
+
+    // Nettoyage défensif avant de créer la nouvelle session
+    try {
+      if (fs.existsSync(sessionPath)) fs.removeSync(sessionPath);
+    } catch (e) {
+      console.error('[CLEAN]', e.message);
+    }
     fs.ensureDirSync(sessionPath);
 
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -189,18 +208,68 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
         keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
       },
       generateHighQualityLinkPreview: true,
-      syncFullHistory: false
+      syncFullHistory: false,
+      markOnlineOnConnect: false
     });
 
     activeSessions.set(chatId, { sock, saveCreds, phone: phoneNumber });
     sock.ev.on('creds.update', saveCreds);
     attachWhatsAppHandlers(sock);
 
+    let pairingRequested = false;
+
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, isNewLogin } = update;
+
       if (isNewLogin) console.log(`[WA ${phoneNumber}] Nouveau login`);
+
+      // ⭐ C'est ICI qu'on demande le code : quand la connexion passe à "connecting"
+      if (connection === 'connecting' && !sock.authState.creds.registered && !pairingRequested) {
+        pairingRequested = true;
+        try {
+          await bot.sendMessage(chatId,
+            `📲 Demande de pairing code pour *${phoneNumber}*... 🔄`,
+            { parse_mode: 'Markdown' }
+          );
+
+          const code = await sock.requestPairingCode(phoneNumber);
+          const pretty = code?.match(/.{1,4}/g)?.join('-') || code;
+
+          await bot.sendMessage(chatId,
+            `════════════════════════════════════════\n` +
+            `🔑 *Code de jumelage* :\n        \`${pretty}\`\n` +
+            `════════════════════════════════════════\n\n` +
+            `👉 *Instructions :*\n` +
+            `- Ouvre WhatsApp sur ton téléphone.\n` +
+            `- Appareils liés → Lier un appareil.\n` +
+            `- Entre ce code.\n\n` +
+            `_Merci à MR KiRA TECH & Mr Ego Tech 🌹_`,
+            { parse_mode: 'Markdown' }
+          );
+
+          // Expiration après 5 min
+          setTimeout(async () => {
+            const entry = activeSessions.get(chatId);
+            if (entry && !entry.sock?.authState?.creds?.registered) {
+              try { entry.sock?.ws?.close(); } catch (e) {}
+              activeSessions.delete(chatId);
+              await bot.sendMessage(chatId,
+                `⌛ *Code expiré (5 min).*\nLe bot n'a pas été connecté. Refais /pair.`,
+                { parse_mode: 'Markdown' }
+              ).catch(() => {});
+            }
+          }, 5 * 60 * 1000);
+
+        } catch (e) {
+          console.error('[PAIR-CODE]', e.message);
+          pairingRequested = false;
+          await bot.sendMessage(chatId, `❌ Échec génération code : ${e.message}`).catch(() => {});
+        }
+      }
+
       if (connection === 'open') {
         console.log(`[WA ${phoneNumber}] Connecté ✅`);
+
         await bot.sendPhoto(chatId, BOT_IMAGE, {
           caption:
             `Félicitations 🎉\nLe bot a été connecté avec succès ✅\n\n` +
@@ -209,6 +278,8 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
             `_Merci à ${AUTHOR} & Ego Tech 🌹🌹_`,
           parse_mode: 'Markdown'
         }).catch(() => {});
+
+        // Message envoyé à son propre WhatsApp (Note à soi-même)
         try {
           const selfJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
           await sock.sendMessage(selfJid, {
@@ -218,43 +289,29 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
               `Join my channel WhatsApp\n\nLink : ${WHATSAPP_CHANNEL}\n\n` +
               `Merci à Kira Tech & Ego Tech 🌹🌹`
           });
-        } catch (e) { console.error('[WA] msg self échoué:', e.message); }
+        } catch (e) {
+          console.error('[WA] msg self échoué:', e.message);
+        }
       }
+
       if (connection === 'close') {
         const code = new Boom(lastDisconnect?.error)?.output?.statusCode;
         console.log(`[WA ${phoneNumber}] Fermé (code ${code})`);
+
         if (code === DisconnectReason.loggedOut) {
           activeSessions.delete(chatId);
-          await bot.sendMessage(chatId, `❌ Le bot n'a pas pu être connecté, réessaie.`).catch(() => {});
+          await bot.sendMessage(chatId, `❌ Failed : le bot n'a pas pu être connecté, réessaie.`)
+            .catch(() => {});
+        } else if (code === DisconnectReason.timedOut || code === 408) {
+          await bot.sendMessage(chatId, `⏱️ Timeout de connexion. Refais /pair.`).catch(() => {});
         }
       }
     });
 
-    await delay(2500);
-
-    if (!sock.authState.creds.registered) {
-      await bot.sendMessage(chatId, `📲 Demande de pairing code pour *${phoneNumber}*... 🔄`, { parse_mode: 'Markdown' });
-      let code;
-      try { code = await sock.requestPairingCode(phoneNumber); }
-      catch (e) {
-        console.error('[PAIR]', e.message);
-        activeSessions.delete(chatId);
-        return bot.sendMessage(chatId, `❌ Échec génération code. Réessaie.`);
-      }
-      const pretty = code?.match(/.{1,4}/g)?.join('-') || code;
-      await bot.sendMessage(chatId,
-        `════════════════════════════════════════\n` +
-        `🔑 *Code de jumelage* :\n        \`${pretty}\`\n` +
-        `════════════════════════════════════════\n\n` +
-        `👉 *Instructions :*\n- Ouvre WhatsApp sur ton téléphone.\n` +
-        `- Appareils liés → Lier un appareil.\n- Entre ce code.\n\n` +
-        `_Merci à MR KiRA TECH & Mr Ego Tech 🌹_`,
-        { parse_mode: 'Markdown' }
-      );
-    }
   } catch (err) {
     console.error('[PAIR]', err);
-    await bot.sendMessage(chatId, `❌ Erreur : ${err.message}`);
+    await bot.sendMessage(chatId, `❌ Erreur : ${err.message}`).catch(() => {});
+    activeSessions.delete(chatId);
   }
 });
 
@@ -280,6 +337,7 @@ function attachWhatsAppHandlers(sock) {
         const cmd = cmdRaw.toLowerCase();
         const isGroup = from.endsWith('@g.us');
 
+        // ---- /help ----
         if (cmd === '/help') {
           await sock.sendMessage(from, {
             text:
@@ -290,6 +348,7 @@ function attachWhatsAppHandlers(sock) {
           continue;
         }
 
+        // ---- /tagall ----
         if (cmd === '/tagall' && isGroup) {
           const meta = await sock.groupMetadata(from);
           const participants = meta.participants.map(p => p.id);
@@ -301,6 +360,7 @@ function attachWhatsAppHandlers(sock) {
           continue;
         }
 
+        // ---- /purge confirm ----
         if (cmd === '/purge') {
           if (!isGroup) {
             await sock.sendMessage(from, { text: '❌ /purge uniquement dans un groupe.' }, { quoted: m });
@@ -348,6 +408,7 @@ function attachWhatsAppHandlers(sock) {
           continue;
         }
 
+        // ---- /block ----
         if (cmd === '/block') {
           const num = (args.join('') || '').replace(/[^\d]/g, '');
           if (!num) {
