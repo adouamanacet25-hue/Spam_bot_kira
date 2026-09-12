@@ -26,12 +26,14 @@ const PORT = process.env.PORT || 3000;
 const BOT_NAME = 'Spam_Bot_Kira';
 const AUTHOR = 'Mr Kira Tech';
 const CHANNEL_LINK = 'https://t.me/+mQ3aQpCsEqI0YmY0';
-const CHANNEL_ID = process.env.CHANNEL_ID || ''; // ex: -1001234567890 (mets l'ID réel)
+const CHANNEL_ID = process.env.CHANNEL_ID || '';
 const BOT_IMAGE = 'https://i.ibb.co/b5Sr9F9Q/097-DFA98-6-D39-4080-9580-F9-DAD9-FF1-B6-F.jpg';
 const WHATSAPP_CHANNEL = 'https://whatsapp.com/channel/0029Vb7WJzp84OmBD0fEEJ2X';
 
-const SESSIONS_DIR = path.join(__dirname, 'sessions');
-fs.ensureDirSync(SESSIONS_DIR);
+const SESSIONS_DIR = process.env.RENDER
+  ? '/data/sessions'
+  : path.join(__dirname, 'sessions');
+try { fs.ensureDirSync(SESSIONS_DIR); } catch (e) { console.error('[FS]', e.message); }
 
 // ================= EXPRESS =================
 const app = express();
@@ -45,7 +47,7 @@ console.log(`[TELEGRAM] ${BOT_NAME} démarré...`);
 
 // ================= JOIN CHECK =================
 async function isUserJoined(userId) {
-  if (!CHANNEL_ID) return true; // pas d'ID configuré → on laisse passer
+  if (!CHANNEL_ID) return true;
   try {
     const member = await bot.getChatMember(CHANNEL_ID, userId);
     return ['creator', 'administrator', 'member', 'restricted'].includes(member.status);
@@ -135,10 +137,10 @@ bot.onText(/\/help/, async (msg) => {
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📲 *Jumeler WhatsApp :*\n` +
     `1. /pair <numéro sans +>\n2. Attends le code (valide 5 min)\n` +
     `3. WhatsApp → Appareils liés → Lier\n4. Entre le code\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💬 *Commandes WhatsApp (après connexion) :*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━\n💬 *Commandes WhatsApp :*\n` +
     `• /tagall  →  Mentionner tout le groupe\n` +
-    `• /purge confirm  →  Retirer les membres (admin requis)\n` +
-    `• /block <numéro> →  Bloquer un contact (1 seule fois)\n\n` +
+    `• /purge confirm  →  Retirer membres (admin)\n` +
+    `• /block <numéro> →  Bloquer un contact\n\n` +
     `_Merci à MR KiRA TECH & Ego Tech 🌹_`,
     { parse_mode: 'Markdown' }
   );
@@ -153,7 +155,7 @@ bot.onText(/\/link/, async (msg) => {
 });
 
 // ================= /pair =================
-const activeSessions = new Map(); // telegramChatId -> { sock, saveCreds, phone, waChatId }
+const activeSessions = new Map();
 
 bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
   if (!(await requireJoin(msg))) return;
@@ -190,11 +192,9 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
       syncFullHistory: false
     });
 
-    activeSessions.set(chatId, { sock, saveCreds, phone: phoneNumber, waChatId: chatId });
+    activeSessions.set(chatId, { sock, saveCreds, phone: phoneNumber });
     sock.ev.on('creds.update', saveCreds);
-
-    // ---- gestion des messages WhatsApp entrants ----
-    attachWhatsAppHandlers(sock, chatId);
+    attachWhatsAppHandlers(sock);
 
     sock.ev.on('connection.update', async (update) => {
       const { connection, lastDisconnect, isNewLogin } = update;
@@ -251,11 +251,6 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
         `_Merci à MR KiRA TECH & Mr Ego Tech 🌹_`,
         { parse_mode: 'Markdown' }
       );
-      setTimeout(() => {
-        if (activeSessions.has(chatId) && !activeSessions.get(chatId).sock?.authState?.creds?.registered) {
-          // rien : le sock reste actif si déjà connecté
-        }
-      }, 5 * 60 * 1000);
     }
   } catch (err) {
     console.error('[PAIR]', err);
@@ -264,7 +259,7 @@ bot.onText(/\/pair(?:\s+(.+))?/, async (msg, match) => {
 });
 
 // ================= HANDLERS WHATSAPP =================
-function attachWhatsAppHandlers(sock, telegramChatId) {
+function attachWhatsAppHandlers(sock) {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const m of messages) {
@@ -285,7 +280,6 @@ function attachWhatsAppHandlers(sock, telegramChatId) {
         const cmd = cmdRaw.toLowerCase();
         const isGroup = from.endsWith('@g.us');
 
-        // ---- /help (self chat ou groupe) ----
         if (cmd === '/help') {
           await sock.sendMessage(from, {
             text:
@@ -296,20 +290,17 @@ function attachWhatsAppHandlers(sock, telegramChatId) {
           continue;
         }
 
-        // ---- /tagall ----
         if (cmd === '/tagall' && isGroup) {
           const meta = await sock.groupMetadata(from);
           const participants = meta.participants.map(p => p.id);
           const mentionText = participants.map(p => `@${p.split('@')[0]}`).join(' ');
           await sock.sendMessage(from, {
-            text:
-              `📢 *TAG ALL*\n\n${mentionText}\n\n_Message de ${AUTHOR} 🌹_`,
+            text: `📢 *TAG ALL*\n\n${mentionText}\n\n_Message de ${AUTHOR} 🌹_`,
             mentions: participants
           }, { quoted: m });
           continue;
         }
 
-        // ---- /purge confirm ----
         if (cmd === '/purge') {
           if (!isGroup) {
             await sock.sendMessage(from, { text: '❌ /purge uniquement dans un groupe.' }, { quoted: m });
@@ -324,7 +315,6 @@ function attachWhatsAppHandlers(sock, telegramChatId) {
             }, { quoted: m });
             continue;
           }
-          // Vérifier que l'émetteur est admin
           const meta = await sock.groupMetadata(from);
           const senderId = m.key.participant || m.participant;
           const senderInfo = meta.participants.find(p => p.id === senderId);
@@ -332,7 +322,6 @@ function attachWhatsAppHandlers(sock, telegramChatId) {
             await sock.sendMessage(from, { text: '❌ Tu dois être admin du groupe pour purge.' }, { quoted: m });
             continue;
           }
-          // Vérifier que le bot est admin
           const botId = sock.user.id.split(':')[0] + '@s.whatsapp.net';
           const botInfo = meta.participants.find(p => p.id === botId);
           if (!botInfo || !['admin', 'superadmin'].includes(botInfo.admin)) {
@@ -349,19 +338,16 @@ function attachWhatsAppHandlers(sock, telegramChatId) {
             .filter(p => !['admin', 'superadmin'].includes(p.admin))
             .map(p => p.id);
 
-          // Retirer par petits lots pour éviter le rate-limit
           const chunkSize = 5;
           for (let i = 0; i < targets.length; i += chunkSize) {
             const chunk = targets.slice(i, i + chunkSize);
-            try {
-              await sock.groupParticipantsUpdate(from, chunk, 'remove');
-            } catch (e) { console.error('[PURGE]', e.message); }
+            try { await sock.groupParticipantsUpdate(from, chunk, 'remove'); }
+            catch (e) { console.error('[PURGE]', e.message); }
             await delay(1500);
           }
           continue;
         }
 
-        // ---- /block ----
         if (cmd === '/block') {
           const num = (args.join('') || '').replace(/[^\d]/g, '');
           if (!num) {
